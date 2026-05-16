@@ -1,17 +1,16 @@
 import { useCallback, useMemo, useState } from 'react'
 import type { JSX } from 'react'
 import { useTranslation } from '@app/renderer/i18n'
-import { Download } from 'lucide-react'
 import { toErrorMessage } from '@app/renderer/shell/utils/format'
 import type { NodeFrame, Point } from '../types'
-import type { LabelColor } from '@shared/types/labelColor'
+import type { LabelColor, NodeLabelColorOverride } from '@shared/types/labelColor'
 import { NodeResizeHandles } from './shared/NodeResizeHandles'
 import { useNodeFrameResize } from '../utils/nodeFrameResize'
 import { shouldStopWheelPropagation } from './taskNode/helpers'
 import { resolveCanonicalNodeMinSize } from '../utils/workspaceNodeSizing'
-import { resolveFilesystemApiForMount } from '../utils/mountAwareFilesystemApi'
-import { normalizeMarkdownFileName, saveNoteAsMarkdownFile } from './NoteNode.markdown'
+import { normalizeMarkdownFileName } from './NoteNode.markdown'
 import { InlineNodeTitleEditor } from './shared/InlineNodeTitleEditor'
+import { NoteNodeActionsMenu } from './NoteNodeActionsMenu'
 
 interface NoteNodeInteractionOptions {
   normalizeViewport?: boolean
@@ -24,15 +23,17 @@ interface NoteNodeProps {
   title: string
   text: string
   labelColor?: LabelColor | null
+  labelColorOverride?: NodeLabelColorOverride
   position: Point
   width: number
   height: number
-  saveDirectoryPath: string
-  saveMountId?: string | null
+  onShowMessage?: (message: string, tone?: 'info' | 'warning' | 'error') => void
   onClose: () => void
   onResize: (frame: NodeFrame) => void
   onTitleChange: (title: string) => void
   onTextChange: (text: string) => void
+  onConvertToTask: () => void
+  onSetLabelColorOverride: (labelColorOverride: NodeLabelColorOverride) => void
   onInteractionStart?: (options?: NoteNodeInteractionOptions) => void
 }
 
@@ -40,21 +41,21 @@ export function NoteNode({
   title,
   text,
   labelColor,
+  labelColorOverride = null,
   position,
   width,
   height,
-  saveDirectoryPath,
-  saveMountId = null,
+  onShowMessage,
   onClose,
   onResize,
   onTitleChange,
   onTextChange,
+  onConvertToTask,
+  onSetLabelColorOverride,
   onInteractionStart,
 }: NoteNodeProps): JSX.Element {
   const { t } = useTranslation()
   const [isSavingMarkdown, setIsSavingMarkdown] = useState(false)
-  const [saveError, setSaveError] = useState<string | null>(null)
-  const [savedMarkdownPath, setSavedMarkdownPath] = useState<string | null>(null)
   const resolvedTitle = title.trim().length > 0 ? title : ''
   const { draftFrame, handleResizePointerDown } = useNodeFrameResize({
     position,
@@ -88,50 +89,38 @@ export function NoteNode({
   )
 
   const saveMarkdown = useCallback(async (): Promise<void> => {
-    const rawName = window.prompt(t('noteNode.saveMarkdownPrompt'), t('noteNode.defaultFileName'))
-    if (rawName === null) {
-      return
-    }
-
-    const fileName = normalizeMarkdownFileName(rawName)
-    if (!fileName) {
-      setSaveError(t('noteNode.invalidFileName'))
-      setSavedMarkdownPath(null)
-      return
-    }
-
-    const directoryPath = saveDirectoryPath.trim()
-    if (!directoryPath) {
-      setSaveError(t('documentNode.filesystemUnavailable'))
-      setSavedMarkdownPath(null)
-      return
-    }
-
-    const filesystemApi = resolveFilesystemApiForMount(saveMountId)
-    if (!filesystemApi) {
-      setSaveError(t('documentNode.filesystemUnavailable'))
-      setSavedMarkdownPath(null)
-      return
-    }
+    const fileName =
+      normalizeMarkdownFileName(resolvedTitle) ??
+      normalizeMarkdownFileName(t('noteNode.defaultFileName')) ??
+      'note.md'
 
     setIsSavingMarkdown(true)
-    setSaveError(null)
-    setSavedMarkdownPath(null)
 
     try {
-      const targetPath = await saveNoteAsMarkdownFile({
-        filesystemApi,
-        directoryPath,
+      const result = await window.opencoveApi.system.saveTextToDownloads({
         fileName,
-        text,
+        content: text,
       })
-      setSavedMarkdownPath(targetPath)
+      if (result.status === 'canceled') {
+        return
+      }
+
+      const messageKey =
+        result.status === 'download-started'
+          ? 'messages.noteMarkdownDownloadStarted'
+          : 'messages.noteMarkdownSaved'
+      onShowMessage?.(t(messageKey, { fileName: result.fileName }))
     } catch (error) {
-      setSaveError(toErrorMessage(error))
+      onShowMessage?.(
+        t('messages.noteMarkdownDownloadFailed', { message: toErrorMessage(error) }),
+        'error',
+      )
     } finally {
       setIsSavingMarkdown(false)
     }
-  }, [saveDirectoryPath, saveMountId, t, text])
+  }, [onShowMessage, resolvedTitle, t, text])
+
+  const canConvertToTask = text.trim().length > 0
 
   return (
     <div
@@ -199,22 +188,14 @@ export function NoteNode({
           data-testid="note-node-header-drag-surface"
           aria-hidden="true"
         />
-        <button
-          type="button"
-          className="note-node__action nodrag"
-          onPointerDown={event => {
-            event.stopPropagation()
-          }}
-          onClick={event => {
-            event.stopPropagation()
-            void saveMarkdown()
-          }}
-          disabled={isSavingMarkdown}
-          aria-label={t('noteNode.saveMarkdown')}
-          title={t('noteNode.saveMarkdown')}
-        >
-          <Download aria-hidden="true" />
-        </button>
+        <NoteNodeActionsMenu
+          isSavingMarkdown={isSavingMarkdown}
+          canConvertToTask={canConvertToTask}
+          labelColorOverride={labelColorOverride}
+          onSaveMarkdown={saveMarkdown}
+          onConvertToTask={onConvertToTask}
+          onSetLabelColorOverride={onSetLabelColorOverride}
+        />
         <button
           type="button"
           className="note-node__close nodrag"
@@ -246,17 +227,6 @@ export function NoteNode({
           onTextChange(event.target.value)
         }}
       />
-
-      {saveError ? (
-        <div className="note-node__save-status note-node__save-status--error" role="status">
-          {saveError}
-        </div>
-      ) : null}
-      {savedMarkdownPath ? (
-        <div className="note-node__save-status" role="status">
-          {t('noteNode.savedMarkdown', { path: savedMarkdownPath })}
-        </div>
-      ) : null}
 
       <NodeResizeHandles
         classNamePrefix="task-node"

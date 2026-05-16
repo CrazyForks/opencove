@@ -1,33 +1,35 @@
 import type { MutableRefObject, ReactElement } from 'react'
 import { NoteNode } from '../NoteNode'
-import type { NodeFrame, TerminalNodeData, WorkspaceSpaceState } from '../../types'
-import type { LabelColor } from '@shared/types/labelColor'
+import type { NodeFrame, TerminalNodeData } from '../../types'
+import type { LabelColor, NodeLabelColorOverride } from '@shared/types/labelColor'
 import { useNodePosition } from './nodePosition'
 
 export function WorkspaceCanvasNoteNodeType({
   data,
   id,
-  spacesRef,
-  workspacePath,
   selectNode,
   clearNodeSelectionRef,
   closeNodeRef,
   resizeNodeRef,
   updateNoteTextRef,
   renameNoteTitleRef,
+  convertNoteToTask,
+  setNodeLabelColorOverride,
   normalizeViewportForTerminalInteractionRef,
+  onShowMessage,
 }: {
   data: TerminalNodeData
   id: string
-  spacesRef: MutableRefObject<WorkspaceSpaceState[]>
-  workspacePath: string
   selectNode: (nodeId: string, options?: { toggle?: boolean }) => void
   clearNodeSelectionRef: MutableRefObject<() => void>
   closeNodeRef: MutableRefObject<(nodeId: string) => Promise<void>>
   resizeNodeRef: MutableRefObject<(nodeId: string, desiredFrame: NodeFrame) => void>
   updateNoteTextRef: MutableRefObject<(nodeId: string, text: string) => void>
   renameNoteTitleRef: MutableRefObject<(nodeId: string, title: string) => void>
+  convertNoteToTask: (nodeId: string) => boolean
+  setNodeLabelColorOverride: (nodeIds: string[], labelColorOverride: NodeLabelColorOverride) => void
   normalizeViewportForTerminalInteractionRef: MutableRefObject<(nodeId: string) => void>
+  onShowMessage?: (message: string, tone?: 'info' | 'warning' | 'error') => void
 }): ReactElement | null {
   const nodePosition = useNodePosition(id)
   const labelColor =
@@ -38,22 +40,16 @@ export function WorkspaceCanvasNoteNodeType({
     return null
   }
 
-  const containingSpace =
-    spacesRef.current.find(candidate => candidate.nodeIds.includes(id)) ?? null
-  const containingSpaceDirectory = containingSpace?.directoryPath.trim() ?? ''
-  const saveDirectoryPath =
-    containingSpaceDirectory.length > 0 ? containingSpaceDirectory : workspacePath
-
   return (
     <NoteNode
       title={data.title}
       text={data.note.text}
       labelColor={labelColor}
+      labelColorOverride={data.labelColorOverride ?? null}
       position={nodePosition}
       width={data.width}
       height={data.height}
-      saveDirectoryPath={saveDirectoryPath}
-      saveMountId={containingSpace?.targetMountId ?? null}
+      onShowMessage={onShowMessage}
       onClose={() => {
         void closeNodeRef.current(id)
       }}
@@ -63,6 +59,12 @@ export function WorkspaceCanvasNoteNodeType({
       }}
       onTitleChange={title => {
         renameNoteTitleRef.current(id, title)
+      }}
+      onConvertToTask={() => {
+        convertNoteToTask(id)
+      }}
+      onSetLabelColorOverride={labelColorOverride => {
+        setNodeLabelColorOverride([id], labelColorOverride)
       }}
       onInteractionStart={options => {
         if (options?.clearSelection === true) {

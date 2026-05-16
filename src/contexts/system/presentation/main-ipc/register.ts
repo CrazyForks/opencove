@@ -1,8 +1,13 @@
 import { execFile } from 'node:child_process'
-import { BrowserWindow, Notification, ipcMain } from 'electron'
+import { mkdir, writeFile } from 'node:fs/promises'
+import path from 'node:path'
+import { app, BrowserWindow, Notification, dialog, ipcMain } from 'electron'
+import type { IpcMainInvokeEvent, SaveDialogOptions } from 'electron'
 import { IPC_CHANNELS } from '../../../../shared/contracts/ipc'
 import type {
   ListSystemFontsResult,
+  SaveTextToDownloadsInput,
+  SaveTextToDownloadsResult,
   ShowSystemNotificationInput,
   ShowSystemNotificationResult,
 } from '../../../../shared/contracts/dto'
@@ -11,6 +16,43 @@ import { registerHandledIpc } from '../../../../app/main/ipc/handle'
 import { createAppError } from '../../../../shared/errors/appError'
 
 const NOTIFY_SEND_TIMEOUT_MS = 5_000
+const MAX_DOWNLOAD_FILE_NAME_LENGTH = 180
+const MAX_DOWNLOAD_TEXT_BYTES = 10 * 1024 * 1024
+const DISALLOWED_DOWNLOAD_FILE_NAME_CHARACTERS = new Set([
+  '<',
+  '>',
+  ':',
+  '"',
+  '/',
+  '\\',
+  '|',
+  '?',
+  '*',
+])
+const WINDOWS_RESERVED_FILE_STEMS = new Set([
+  'con',
+  'prn',
+  'aux',
+  'nul',
+  'com1',
+  'com2',
+  'com3',
+  'com4',
+  'com5',
+  'com6',
+  'com7',
+  'com8',
+  'com9',
+  'lpt1',
+  'lpt2',
+  'lpt3',
+  'lpt4',
+  'lpt5',
+  'lpt6',
+  'lpt7',
+  'lpt8',
+  'lpt9',
+])
 
 const MONOSPACE_KEYWORDS = [
   'mono',
@@ -111,6 +153,127 @@ function normalizeShowSystemNotificationPayload(payload: unknown): ShowSystemNot
   }
 }
 
+function hasUnsafeDownloadFileNameCharacter(value: string): boolean {
+  for (const character of value) {
+    if (DISALLOWED_DOWNLOAD_FILE_NAME_CHARACTERS.has(character) || character.charCodeAt(0) < 32) {
+      return true
+    }
+  }
+
+  return false
+}
+
+function normalizeDownloadFileName(value: unknown): string {
+  if (typeof value !== 'string') {
+    throw createAppError('common.invalid_input', {
+      debugMessage: 'Invalid fileName for system:save-text-to-downloads.',
+    })
+  }
+
+  const fileName = value.trim()
+  const stem = fileName.slice(0, fileName.length - path.extname(fileName).length).toLowerCase()
+  if (
+    fileName.length === 0 ||
+    fileName.length > MAX_DOWNLOAD_FILE_NAME_LENGTH ||
+    fileName !== path.basename(fileName) ||
+    hasUnsafeDownloadFileNameCharacter(fileName) ||
+    /[. ]$/.test(fileName) ||
+    WINDOWS_RESERVED_FILE_STEMS.has(stem)
+  ) {
+    throw createAppError('common.invalid_input', {
+      debugMessage: 'Invalid fileName for system:save-text-to-downloads.',
+    })
+  }
+
+  return fileName
+}
+
+function normalizeSaveTextToDownloadsPayload(payload: unknown): SaveTextToDownloadsInput {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw createAppError('common.invalid_input', {
+      debugMessage: 'Invalid payload for system:save-text-to-downloads.',
+    })
+  }
+
+  const record = payload as Record<string, unknown>
+  const fileName = normalizeDownloadFileName(record.fileName)
+  if (typeof record.content !== 'string') {
+    throw createAppError('common.invalid_input', {
+      debugMessage: 'Invalid content for system:save-text-to-downloads.',
+    })
+  }
+
+  if (Buffer.byteLength(record.content, 'utf8') > MAX_DOWNLOAD_TEXT_BYTES) {
+    throw createAppError('common.invalid_input', {
+      debugMessage: 'Content is too large for system:save-text-to-downloads.',
+    })
+  }
+
+  return {
+    fileName,
+    content: record.content,
+  }
+}
+
+function shouldBypassSaveDialog(): boolean {
+  return Boolean(process.env.OPENCOVE_TEST_BYPASS_SAVE_DIALOG)
+}
+
+function resolveSaveDialogParent(event: IpcMainInvokeEvent): BrowserWindow | null {
+  try {
+    return BrowserWindow.fromWebContents(event.sender)
+  } catch {
+    return null
+  }
+}
+
+function createSaveTextToDownloadsDialogOptions(fileName: string): SaveDialogOptions {
+  return {
+    defaultPath: path.join(app.getPath('downloads'), fileName),
+    properties: ['createDirectory', 'showOverwriteConfirmation'],
+  }
+}
+
+async function resolveSaveTextToDownloadsPath(
+  event: IpcMainInvokeEvent,
+  fileName: string,
+): Promise<string | null> {
+  const options = createSaveTextToDownloadsDialogOptions(fileName)
+  if (shouldBypassSaveDialog()) {
+    return options.defaultPath ?? path.join(app.getPath('downloads'), fileName)
+  }
+
+  const parent = resolveSaveDialogParent(event)
+  const result = parent
+    ? await dialog.showSaveDialog(parent, options)
+    : await dialog.showSaveDialog(options)
+
+  if (result.canceled || !result.filePath) {
+    return null
+  }
+
+  return result.filePath
+}
+
+async function saveTextToDownloads(
+  payload: SaveTextToDownloadsInput,
+  event: IpcMainInvokeEvent,
+): Promise<SaveTextToDownloadsResult> {
+  const targetPath = await resolveSaveTextToDownloadsPath(event, payload.fileName)
+  if (!targetPath) {
+    return { status: 'canceled', fileName: payload.fileName, path: null }
+  }
+
+  await mkdir(path.dirname(targetPath), { recursive: true })
+  await writeFile(targetPath, payload.content, { encoding: 'utf8' })
+
+  return {
+    status: 'saved',
+    fileName: path.basename(targetPath),
+    path: targetPath,
+  }
+}
+
 function focusFirstAppWindow(): void {
   const target = BrowserWindow.getAllWindows().find(window => !window.isDestroyed())
   if (!target) {
@@ -180,9 +343,17 @@ export function registerSystemIpcHandlers(): IpcRegistrationDisposable {
     { defaultErrorCode: 'common.unexpected' },
   )
 
+  registerHandledIpc(
+    IPC_CHANNELS.systemSaveTextToDownloads,
+    async (_event, payload): Promise<SaveTextToDownloadsResult> =>
+      saveTextToDownloads(normalizeSaveTextToDownloadsPayload(payload), _event),
+    { defaultErrorCode: 'common.unexpected' },
+  )
+
   return {
     dispose: () => {
       ipcMain.removeHandler(IPC_CHANNELS.systemListFonts)
+      ipcMain.removeHandler(IPC_CHANNELS.systemSaveTextToDownloads)
       ipcMain.removeHandler(IPC_CHANNELS.systemShowNotification)
     },
   }

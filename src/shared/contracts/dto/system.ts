@@ -16,3 +16,16 @@ export interface ShowSystemNotificationInput {
 export interface ShowSystemNotificationResult {
   shown: boolean
 }
+
+export interface SaveTextToDownloadsInput {
+  fileName: string
+  content: string
+}
+
+export type SaveTextToDownloadsStatus = 'saved' | 'download-started' | 'canceled'
+
+export interface SaveTextToDownloadsResult {
+  status: SaveTextToDownloadsStatus
+  fileName: string
+  path: string | null
+}

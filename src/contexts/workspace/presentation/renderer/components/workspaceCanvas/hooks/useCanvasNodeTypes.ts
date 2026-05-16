@@ -1,6 +1,7 @@
 import type { MutableRefObject } from 'react'
 import type { Node } from '@xyflow/react'
 import type { AgentSettings } from '@contexts/settings/domain/agentSettings'
+import type { NodeLabelColorOverride } from '@shared/types/labelColor'
 import { useTerminalClientDisplayCalibration } from '@contexts/settings/presentation/renderer/terminalDisplayCalibrationStorage'
 import { resolveTerminalDisplayCalibrationCompensation } from '@contexts/settings/domain/terminalDisplayCalibration'
 import type { TerminalNodeData, WorkspaceSpaceState } from '../../../types'
@@ -16,8 +17,11 @@ export function useWorkspaceCanvasComposedNodeTypes({
   selectedSpaceIdsRef,
   spacesRef,
   workspacePath,
+  onShowMessage,
   agentSettings,
   actionRefs,
+  convertNoteToTask,
+  setNodeLabelColorOverride,
 }: {
   setNodes: (
     updater: (prevNodes: Node<TerminalNodeData>[]) => Node<TerminalNodeData>[],
@@ -29,8 +33,11 @@ export function useWorkspaceCanvasComposedNodeTypes({
   selectedSpaceIdsRef: MutableRefObject<string[]>
   spacesRef: MutableRefObject<WorkspaceSpaceState[]>
   workspacePath: string
+  onShowMessage?: Parameters<typeof useWorkspaceCanvasNodeTypes>[0]['onShowMessage']
   agentSettings: AgentSettings
   actionRefs: WorkspaceCanvasActionRefs
+  convertNoteToTask: (nodeId: string) => boolean
+  setNodeLabelColorOverride: (nodeIds: string[], labelColorOverride: NodeLabelColorOverride) => void
 }) {
   const savedTerminalDisplayCalibration = useTerminalClientDisplayCalibration({
     terminalFontSize: agentSettings.terminalFontSize,
@@ -54,6 +61,7 @@ export function useWorkspaceCanvasComposedNodeTypes({
   return useWorkspaceCanvasNodeTypes({
     spacesRef,
     workspacePath,
+    onShowMessage,
     terminalFontSize: agentSettings.terminalFontSize,
     terminalFontFamily: agentSettings.terminalFontFamily,
     terminalDisplayCalibration,
@@ -62,6 +70,8 @@ export function useWorkspaceCanvasComposedNodeTypes({
     browserDefaultMode: agentSettings.browserDefaultMode,
     browserSearchEngine: agentSettings.browserSearchEngine,
     selectNode,
+    convertNoteToTask,
+    setNodeLabelColorOverride,
     ...actionRefs,
   })
 }

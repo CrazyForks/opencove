@@ -28,6 +28,9 @@ export const enMessages = {
   arrangeAllSkippedSpaces_other: 'Skipped {{count}} spaces: not enough room to arrange.',
   arrangeSpaceNoRoom: 'Not enough room to arrange this space. Resize the space and try again.',
   noteToTaskRequiresContent: 'Cannot convert an empty note into a task.',
+  noteMarkdownSaved: 'Saved {{fileName}}.',
+  noteMarkdownDownloadStarted: 'Download started for {{fileName}}.',
+  noteMarkdownDownloadFailed: 'Failed to download note: {{message}}',
   agentLastMessageUnavailable:
     'The current agent is unavailable, so the last message cannot be copied.',
   agentLastMessageStartedAtMissing:
