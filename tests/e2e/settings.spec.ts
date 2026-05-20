@@ -163,13 +163,15 @@ test.describe('Settings', () => {
       await focusToggle.uncheck()
 
       await agentNav.click()
-      const defaultProvider = window.locator('[data-testid="settings-default-provider"]')
-      const defaultProviderTrigger = window.locator(
-        '[data-testid="settings-default-provider-trigger"]',
-      )
-      await expect(defaultProviderTrigger).toBeVisible()
-      await selectCoveOption(window, 'settings-default-provider', 'codex')
-      await expect(defaultProvider).toHaveValue('codex')
+      const defaultProvider = window.locator('[data-testid="settings-default-provider-codex"]')
+      await expect(defaultProvider).toBeVisible()
+      await defaultProvider.check()
+      await expect(defaultProvider).toBeChecked()
+
+      const configureCodex = window.locator('[data-testid="settings-agent-configure-codex"]')
+      await configureCodex.click()
+      const configurePanel = window.locator('[data-testid="settings-agent-configure-panel-codex"]')
+      await expect(configurePanel).toBeVisible()
 
       const customModelEnabled = window.locator(
         '[data-testid="settings-custom-model-enabled-codex"]',
@@ -186,14 +188,9 @@ test.describe('Settings', () => {
         'gpt-5.2-codex',
       )
 
-      const modelOverrideSection = window.locator('#settings-section-model-override')
-      await expect(modelOverrideSection).toBeVisible()
-      await modelOverrideSection.scrollIntoViewIfNeeded()
+      await configurePanel.scrollIntoViewIfNeeded()
 
-      const providerTitle = modelOverrideSection
-        .locator('.settings-provider-card__title')
-        .filter({ hasText: 'Codex' })
-        .first()
+      const providerTitle = configurePanel.locator('.settings-agent-configure-panel__header strong')
       await expect(providerTitle).toBeVisible()
 
       const providerTitleColor = await providerTitle.evaluate(element => {
@@ -239,8 +236,8 @@ test.describe('Settings', () => {
       await expect(window.locator('#settings-section-task-title')).toHaveCount(0)
 
       await window.locator('.settings-panel__close').click()
-      await expect(window.locator('.workspace-sidebar__agent-provider')).toHaveText('Codex')
-      await expect(window.locator('.workspace-sidebar__agent-model')).toHaveText('gpt-5.2-codex')
+      await expect(window.locator('.workspace-sidebar__agent-provider')).toHaveCount(0)
+      await expect(window.locator('.workspace-sidebar__agent-model')).toHaveCount(0)
 
       const readPersistedSettings = async () =>
         await window.evaluate(async () => {
@@ -311,8 +308,8 @@ test.describe('Settings', () => {
           return document.documentElement.dataset.coveTheme
         }),
       ).resolves.toBe('light')
-      await expect(window.locator('.workspace-sidebar__agent-provider')).toHaveText('Codex')
-      await expect(window.locator('.workspace-sidebar__agent-model')).toHaveText('gpt-5.2-codex')
+      await expect(window.locator('.workspace-sidebar__agent-provider')).toHaveCount(0)
+      await expect(window.locator('.workspace-sidebar__agent-model')).toHaveCount(0)
 
       const persistedSettings = await readPersistedSettings()
 
