@@ -1,10 +1,11 @@
-export const PTY_HOST_PROTOCOL_VERSION = 1 as const
+export const PTY_HOST_PROTOCOL_VERSION = 3 as const
 
 export type PtyHostWriteEncoding = 'utf8' | 'binary'
 
 export type PtyHostSpawnRequest = {
   type: 'spawn'
   requestId: string
+  launchId: string
   command: string
   args: string[]
   cwd: string
@@ -27,6 +28,10 @@ export type PtyHostResizeRequest = {
   cols: number
   rows: number
 }
+
+export type PtyHostResizeAck =
+  | { status: 'applied_verified'; cols: number; rows: number }
+  | { status: 'applied_unverified' }
 
 export type PtyHostKillRequest = {
   type: 'kill'
@@ -59,7 +64,7 @@ export type PtyHostResponseMessage =
       type: 'response'
       requestId: string
       ok: true
-      result: { sessionId: string; cols?: number; rows?: number }
+      result: { sessionId: string; resize?: PtyHostResizeAck }
     }
   | {
       type: 'response'

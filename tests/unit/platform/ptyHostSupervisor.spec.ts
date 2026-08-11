@@ -1,54 +1,5 @@
-import { EventEmitter } from 'node:events'
 import { PtyHostSupervisor } from '@platform/process/ptyHost/supervisor'
-import type { PtyHostProcess } from '@platform/process/ptyHost/supervisor'
-
-class TestPtyHostProcess extends EventEmitter implements PtyHostProcess {
-  public readonly sentMessages: unknown[] = []
-  public readonly failPostMessageTypes = new Set<string>()
-  public readonly stdout = null
-  public readonly stderr = null
-  public pid: number | undefined = 1234
-  public killCalls = 0
-
-  public postMessage(message: unknown, callback?: (error: Error | null) => void): void {
-    const record =
-      message && typeof message === 'object' ? (message as Record<string, unknown>) : null
-    const messageType = typeof record?.type === 'string' ? record.type : null
-
-    if (messageType && this.failPostMessageTypes.has(messageType)) {
-      callback?.(new Error('Channel closed'))
-      return
-    }
-
-    this.sentMessages.push(message)
-    callback?.(null)
-  }
-
-  public kill(): boolean {
-    this.killCalls += 1
-    this.emit('exit', 0)
-    return true
-  }
-}
-
-function findLastSentMessage<T extends { type: string }>(
-  process: TestPtyHostProcess,
-  type: T['type'],
-): T | null {
-  for (let index = process.sentMessages.length - 1; index >= 0; index -= 1) {
-    const message = process.sentMessages[index]
-    if (!message || typeof message !== 'object') {
-      continue
-    }
-
-    const record = message as Record<string, unknown>
-    if (record.type === type) {
-      return message as T
-    }
-  }
-
-  return null
-}
+import { findLastSentMessage, TestPtyHostProcess } from './ptyHostSupervisor.testSupport'
 
 describe('PtyHostSupervisor', () => {
   it('spawns sessions after ready + response', async () => {
@@ -69,7 +20,7 @@ describe('PtyHostSupervisor', () => {
       rows: 24,
     })
 
-    testProcess.emit('message', { type: 'ready', protocolVersion: 1 })
+    testProcess.emit('message', { type: 'ready', protocolVersion: 3 })
     await new Promise(resolve => setTimeout(resolve, 0))
 
     const sentSpawn = findLastSentMessage<{ type: 'spawn'; requestId: string }>(
@@ -110,7 +61,7 @@ describe('PtyHostSupervisor', () => {
         rows: 24,
       })
 
-      testProcess.emit('message', { type: 'ready', protocolVersion: 1 })
+      testProcess.emit('message', { type: 'ready', protocolVersion: 3 })
       await new Promise(resolve => setTimeout(resolve, 0))
 
       const sentSpawn = findLastSentMessage<{ type: 'spawn'; requestId: string; env?: unknown }>(
@@ -162,7 +113,7 @@ describe('PtyHostSupervisor', () => {
       rows: 24,
     })
 
-    testProcess.emit('message', { type: 'ready', protocolVersion: 1 })
+    testProcess.emit('message', { type: 'ready', protocolVersion: 3 })
     await new Promise(resolve => setTimeout(resolve, 0))
 
     const sentSpawn = findLastSentMessage<{ type: 'spawn'; requestId: string; env?: unknown }>(
@@ -210,7 +161,7 @@ describe('PtyHostSupervisor', () => {
       rows: 24,
     })
 
-    testProcess.emit('message', { type: 'ready', protocolVersion: 1 })
+    testProcess.emit('message', { type: 'ready', protocolVersion: 3 })
     await new Promise(resolve => setTimeout(resolve, 0))
 
     const sentSpawn = findLastSentMessage<{ type: 'spawn'; requestId: string }>(
@@ -248,7 +199,7 @@ describe('PtyHostSupervisor', () => {
       cols: 80,
       rows: 24,
     })
-    testProcess.emit('message', { type: 'ready', protocolVersion: 1 })
+    testProcess.emit('message', { type: 'ready', protocolVersion: 3 })
     await new Promise(resolve => setTimeout(resolve, 0))
     const sentSpawn = findLastSentMessage<{ type: 'spawn'; requestId: string }>(
       testProcess,
@@ -283,14 +234,65 @@ describe('PtyHostSupervisor', () => {
       type: 'response',
       requestId: sentResize?.requestId,
       ok: true,
-      result: { sessionId: 's-resize', cols: 100, rows: 32 },
+      result: {
+        sessionId: 's-resize',
+        resize: { status: 'applied_verified', cols: 91, rows: 27 },
+      },
     })
 
     await expect(resizePromise).resolves.toEqual({
       sessionId: 's-resize',
-      cols: 100,
-      rows: 32,
+      status: 'applied_verified',
+      cols: 91,
+      rows: 27,
     })
+    supervisor.dispose()
+  })
+
+  it('rejects a resize response that omits applied geometry instead of echoing the request', async () => {
+    const testProcess = new TestPtyHostProcess()
+    const supervisor = new PtyHostSupervisor({
+      baseDir: '/',
+      resolveEntryPath: () => '/fake/ptyHost.js',
+      createProcess: () => testProcess,
+      reportIssue: () => undefined,
+    })
+
+    const spawnPromise = supervisor.spawn({
+      command: '/bin/zsh',
+      args: [],
+      cwd: '/',
+      cols: 80,
+      rows: 24,
+    })
+    testProcess.emit('message', { type: 'ready', protocolVersion: 3 })
+    await vi.waitFor(() => expect(findLastSentMessage(testProcess, 'spawn')).not.toBeNull())
+    const sentSpawn = findLastSentMessage<{ type: 'spawn'; requestId: string }>(
+      testProcess,
+      'spawn',
+    )
+    testProcess.emit('message', {
+      type: 'response',
+      requestId: sentSpawn?.requestId,
+      ok: true,
+      result: { sessionId: 's-missing-geometry' },
+    })
+    await spawnPromise
+
+    const resizePromise = supervisor.resize('s-missing-geometry', 120, 40)
+    await vi.waitFor(() => expect(findLastSentMessage(testProcess, 'resize')).not.toBeNull())
+    const sentResize = findLastSentMessage<{ type: 'resize'; requestId: string }>(
+      testProcess,
+      'resize',
+    )
+    testProcess.emit('message', {
+      type: 'response',
+      requestId: sentResize?.requestId,
+      ok: true,
+      result: { sessionId: 's-missing-geometry' },
+    })
+
+    await expect(resizePromise).rejects.toThrow('missing applied geometry status')
     supervisor.dispose()
   })
 
@@ -312,7 +314,7 @@ describe('PtyHostSupervisor', () => {
       rows: 24,
     })
 
-    testProcess.emit('message', { type: 'ready', protocolVersion: 1 })
+    testProcess.emit('message', { type: 'ready', protocolVersion: 3 })
     await new Promise(resolve => setTimeout(resolve, 0))
 
     const sentSpawn = findLastSentMessage<{ type: 'spawn'; requestId: string }>(
@@ -356,7 +358,7 @@ describe('PtyHostSupervisor', () => {
       rows: 24,
     })
 
-    testProcess.emit('message', { type: 'ready', protocolVersion: 1 })
+    testProcess.emit('message', { type: 'ready', protocolVersion: 3 })
     await new Promise(resolve => setTimeout(resolve, 0))
 
     const sentSpawn = findLastSentMessage<{ type: 'spawn'; requestId: string }>(
