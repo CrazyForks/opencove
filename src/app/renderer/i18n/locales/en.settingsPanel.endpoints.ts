@@ -37,8 +37,19 @@ export const enSettingsPanelEndpoints = {
     managedRemotePortPlaceholder: 'Auto',
     hostnameLabel: 'Hostname',
     portLabel: 'Port',
+    portInvalid: 'Enter a whole-number port from 1 to 65535.',
     tokenLabel: 'Token',
     tokenHelp: 'This token is submitted once and cleared after registration.',
     tokenRequired: 'Token is required.',
+  },
+  remove: {
+    title: 'Remove endpoint?',
+    description: '“{{name}}” will no longer be available to OpenCove.',
+    impact_one: 'This will unbind {{count}} mount from the endpoint.',
+    impact_other: 'This will unbind {{count}} mounts from the endpoint.',
+  },
+  edit: {
+    title: 'Edit managed SSH endpoint',
+    help: 'Update connection details without changing endpoint identity or existing mount bindings.',
   },
 } as const

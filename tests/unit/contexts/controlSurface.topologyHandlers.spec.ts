@@ -40,7 +40,13 @@ function createSubject(options?: {
     registerManagedSshEndpoint: async () => {
       throw new Error('not used')
     },
-    removeEndpoint: async () => undefined,
+    updateManagedSshEndpoint: async () => {
+      throw new Error('not used')
+    },
+    removeEndpoint: async () => ({ removedMountCount: 0 }),
+    getEndpointRemovalImpact: async () => ({ mountIds: [], mountCount: 0 }),
+    getEndpointRemovalImpacts: async endpointIds =>
+      new Map(endpointIds.map(endpointId => [endpointId, { mountIds: [], mountCount: 0 }])),
     resolveEndpointRuntimeAccess: async () => null,
     resolveRemoteEndpointConnection: async endpointId =>
       endpointId === 'remote' ? { hostname: 'example.com', port: 1234, token: 'token' } : null,

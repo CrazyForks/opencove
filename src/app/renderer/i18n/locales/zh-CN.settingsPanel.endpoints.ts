@@ -37,8 +37,19 @@ export const zhCNSettingsPanelEndpoints = {
     managedRemotePortPlaceholder: '自动',
     hostnameLabel: '主机',
     portLabel: '端口',
+    portInvalid: '请输入 1 到 65535 之间的整数端口。',
     tokenLabel: 'Token',
     tokenHelp: 'Token 仅提交一次，注册后会自动清空。',
     tokenRequired: 'Token 不能为空。',
+  },
+  remove: {
+    title: '移除端点？',
+    description: 'OpenCove 将无法再使用“{{name}}”。',
+    impact_one: '此操作会解除该端点上的 {{count}} 个挂载。',
+    impact_other: '此操作会解除该端点上的 {{count}} 个挂载。',
+  },
+  edit: {
+    title: '编辑托管 SSH 端点',
+    help: '更新连接信息，同时保持端点身份和现有挂载绑定不变。',
   },
 } as const

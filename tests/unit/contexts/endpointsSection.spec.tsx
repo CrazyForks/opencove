@@ -23,6 +23,7 @@ function createOverview(overrides: Partial<WorkerEndpointOverviewDto>): WorkerEn
     recommendedAction: 'none',
     isManaged: false,
     canBrowse: false,
+    dependentMountCount: 0,
     runtime: {
       appVersion: null,
       protocolVersion: null,
@@ -59,6 +60,7 @@ function installEndpointsApi() {
       summary: 'Not connected.',
       recommendedAction: 'connect',
       isManaged: true,
+      dependentMountCount: 2,
     }),
   ]
 
@@ -128,6 +130,37 @@ function installEndpointsApi() {
         overviews.push(overview)
         return { endpoint: overview.endpoint }
       }
+      case 'endpoint.updateManagedSsh': {
+        const input = payload as {
+          endpointId: string
+          displayName?: string | null
+          host: string
+          port?: number | null
+          username?: string | null
+          remotePort: number
+        }
+        const overview = overviews.find(
+          candidate => candidate.endpoint.endpointId === input.endpointId,
+        )
+        if (!overview || overview.endpoint.access?.kind !== 'managed_ssh') {
+          throw new Error(`Unknown managed endpoint: ${input.endpointId}`)
+        }
+        overview.endpoint = {
+          ...overview.endpoint,
+          displayName: input.displayName?.trim() || input.host,
+          access: {
+            kind: 'managed_ssh',
+            managedSsh: {
+              host: input.host,
+              port: input.port ?? null,
+              username: input.username ?? null,
+              remotePort: input.remotePort,
+              remotePlatform: 'auto',
+            },
+          },
+        }
+        return { endpoint: overview.endpoint }
+      }
       case 'endpoint.prepare': {
         const { endpointId } = payload as { endpointId: string }
         const matched = overviews.find(overview => overview.endpoint.endpointId === endpointId)
@@ -142,6 +175,13 @@ function installEndpointsApi() {
         return { overview: { ...matched } }
       }
       case 'endpoint.remove':
+        overviews.splice(
+          overviews.findIndex(
+            overview =>
+              overview.endpoint.endpointId === (payload as { endpointId: string }).endpointId,
+          ),
+          1,
+        )
         return null
       default:
         throw new Error(`Unexpected invoke id: ${id}`)
@@ -213,6 +253,29 @@ describe('EndpointsSection', () => {
     )
   })
 
+  it.each(['abc', '0', '70000', '2 2'])('rejects illegal managed SSH port %j', async port => {
+    const { invoke } = installEndpointsApi()
+
+    render(<EndpointsSection />)
+
+    await screen.findByText('Remote endpoints')
+    fireEvent.click(screen.getByTestId('settings-endpoints-open-register'))
+    fireEvent.change(screen.getByTestId('settings-endpoints-register-hostname'), {
+      target: { value: 'build.example.com' },
+    })
+    fireEvent.change(screen.getByTestId('settings-endpoints-register-ssh-port'), {
+      target: { value: port },
+    })
+
+    expect(screen.getByTestId('settings-endpoints-register-ssh-port-error')).toHaveTextContent(
+      'Enter a whole-number port from 1 to 65535.',
+    )
+    expect(screen.getByTestId('settings-endpoints-register-submit')).toBeDisabled()
+    expect(invoke).not.toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'endpoint.registerManagedSsh' }),
+    )
+  })
+
   it('can switch to manual mode and register a manual endpoint', async () => {
     const { invoke } = installEndpointsApi()
 
@@ -250,6 +313,35 @@ describe('EndpointsSection', () => {
     )
   })
 
+  it('edits a managed SSH endpoint with the reused dialog', async () => {
+    const { invoke } = installEndpointsApi()
+
+    render(<EndpointsSection />)
+    await screen.findAllByText('SSH Box')
+    fireEvent.click(screen.getByTestId('settings-endpoints-edit-managed-1'))
+
+    expect(screen.getByTestId('settings-endpoints-register-window')).toHaveTextContent(
+      'Edit managed SSH endpoint',
+    )
+    expect(screen.queryByTestId('settings-endpoints-register-mode')).not.toBeInTheDocument()
+    expect(screen.getByTestId('settings-endpoints-register-ssh-port')).toHaveValue('22')
+    fireEvent.change(screen.getByTestId('settings-endpoints-register-ssh-port'), {
+      target: { value: '2222' },
+    })
+    fireEvent.click(screen.getByTestId('settings-endpoints-register-submit'))
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('settings-endpoints-register-window')).not.toBeInTheDocument()
+    })
+    expect(await screen.findByText('Managed SSH · ubuntu@example.com:2222')).toBeVisible()
+    expect(invoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'endpoint.updateManagedSsh',
+        payload: expect.objectContaining({ endpointId: 'managed-1', port: 2222 }),
+      }),
+    )
+  })
+
   it('runs the recommended connect action from the endpoint card', async () => {
     const { invoke } = installEndpointsApi()
 
@@ -264,6 +356,36 @@ describe('EndpointsSection', () => {
     expect(invoke).toHaveBeenCalledWith(
       expect.objectContaining({
         id: 'endpoint.prepare',
+      }),
+    )
+  })
+
+  it('confirms removal with the dependent mount count and supports cancel', async () => {
+    const { invoke } = installEndpointsApi()
+
+    render(<EndpointsSection />)
+    await screen.findAllByText('SSH Box')
+
+    fireEvent.click(screen.getByTestId('settings-endpoints-remove-managed-1'))
+    expect(screen.getByTestId('settings-endpoints-remove-window')).toBeVisible()
+    expect(screen.getByTestId('settings-endpoints-remove-impact')).toHaveTextContent(
+      'This will unbind 2 mounts from the endpoint.',
+    )
+
+    fireEvent.click(screen.getByTestId('settings-endpoints-remove-cancel'))
+    expect(screen.queryByTestId('settings-endpoints-remove-window')).not.toBeInTheDocument()
+    expect(screen.getAllByText('SSH Box').length).toBeGreaterThan(0)
+
+    fireEvent.click(screen.getByTestId('settings-endpoints-remove-managed-1'))
+    fireEvent.click(screen.getByTestId('settings-endpoints-remove-confirm'))
+
+    await waitFor(() => {
+      expect(screen.queryByText('SSH Box')).not.toBeInTheDocument()
+    })
+    expect(invoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'endpoint.remove',
+        payload: { endpointId: 'managed-1', expectedMountCount: 2 },
       }),
     )
   })

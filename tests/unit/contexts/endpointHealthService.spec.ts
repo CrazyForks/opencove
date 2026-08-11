@@ -77,9 +77,11 @@ function createSubject(options: {
   access: EndpointRuntimeAccess
   managedRuntime?: Partial<ManagedSshEndpointRuntime>
   listEndpoints?: Array<EndpointRuntimeAccess['endpoint']>
+  dependentMountCount?: number
 }) {
   const accessByEndpointId = new Map([[options.access.endpoint.endpointId, options.access]])
   const endpoints = options.listEndpoints ?? [options.access.endpoint]
+  const dependentMountCount = options.dependentMountCount ?? 0
 
   const topology: WorkerTopologyStore = {
     listEndpoints: async () => ({ endpoints }),
@@ -89,7 +91,18 @@ function createSubject(options: {
     registerManagedSshEndpoint: async () => {
       throw new Error('not used')
     },
-    removeEndpoint: async () => undefined,
+    updateManagedSshEndpoint: async () => {
+      throw new Error('not used')
+    },
+    removeEndpoint: async () => ({ removedMountCount: 0 }),
+    getEndpointRemovalImpact: async () => ({ mountIds: [], mountCount: dependentMountCount }),
+    getEndpointRemovalImpacts: async endpointIds =>
+      new Map(
+        endpointIds.map(endpointId => [
+          endpointId,
+          { mountIds: [], mountCount: dependentMountCount },
+        ]),
+      ),
     resolveEndpointRuntimeAccess: async endpointId => accessByEndpointId.get(endpointId) ?? null,
     resolveRemoteEndpointConnection: async () => null,
     listMounts: async () => ({ projectId: 'project', mounts: [] }),
@@ -184,7 +197,7 @@ describe('endpointHealthService', () => {
     expect(overview?.recommendedAction).toBe('repair_credentials')
   })
 
-  it('restarts the managed tunnel when repairing credentials', async () => {
+  it('restarts the managed tunnel and preserves dependent mounts after successful repair', async () => {
     const managedAccess = createManagedAccess()
     invokeControlSurfaceMock.mockResolvedValue({
       httpStatus: 200,
@@ -216,6 +229,7 @@ describe('endpointHealthService', () => {
     }))
     const service = createSubject({
       access: managedAccess,
+      dependentMountCount: 3,
       managedRuntime: {
         prepare,
       },
@@ -227,6 +241,7 @@ describe('endpointHealthService', () => {
     })
 
     expect(result.overview.status).toBe('connected')
+    expect(result.overview.dependentMountCount).toBe(3)
     expect(prepare).toHaveBeenCalledWith(
       {
         endpointId: managedAccess.endpoint.endpointId,

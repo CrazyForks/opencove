@@ -37,6 +37,7 @@ function buildOverview(
     checkedAt?: string
     recommendedAction: WorkerEndpointHealthActionDto
     canBrowse?: boolean
+    dependentMountCount: number
     runtime?: ProbedRuntime
     summary?: string
   },
@@ -63,6 +64,7 @@ function buildOverview(
     recommendedAction: options.recommendedAction,
     isManaged: access.access?.kind === 'managed_ssh',
     canBrowse: options.canBrowse ?? false,
+    dependentMountCount: options.dependentMountCount,
     runtime: options.runtime ?? emptyRuntime(),
   }
 }
@@ -217,6 +219,7 @@ export function createEndpointHealthService(options: {
 }): EndpointHealthService {
   const buildOverviewForAccess = async (
     access: EndpointRuntimeAccess,
+    dependentMountCount: number,
   ): Promise<WorkerEndpointOverviewDto> => {
     if (access.kind === 'manual') {
       const probed = await probeEndpointConnection(access.connection)
@@ -226,6 +229,7 @@ export function createEndpointHealthService(options: {
         runtime: probed.runtime,
         recommendedAction: recommendedActionForAccessStatus(access, probed.status),
         canBrowse: probed.status === 'connected',
+        dependentMountCount,
       })
     }
 
@@ -235,6 +239,7 @@ export function createEndpointHealthService(options: {
         status: 'disconnected',
         details: ['Ready to connect over SSH.'],
         recommendedAction: 'connect',
+        dependentMountCount,
       })
     }
 
@@ -243,6 +248,7 @@ export function createEndpointHealthService(options: {
         status: 'connecting',
         details: snapshot.stderrTail.trim().length > 0 ? [snapshot.stderrTail.trim()] : [],
         recommendedAction: 'show_details',
+        dependentMountCount,
       })
     }
 
@@ -255,6 +261,7 @@ export function createEndpointHealthService(options: {
         status: 'tunnel_failed',
         details,
         recommendedAction: 'repair_tunnel',
+        dependentMountCount,
       })
     }
 
@@ -263,6 +270,7 @@ export function createEndpointHealthService(options: {
         status: 'disconnected',
         details: ['Ready to connect over SSH.'],
         recommendedAction: 'connect',
+        dependentMountCount,
       })
     }
 
@@ -279,14 +287,22 @@ export function createEndpointHealthService(options: {
       runtime: probed.runtime,
       recommendedAction: recommendedActionForAccessStatus(access, status),
       canBrowse: status === 'connected',
+      dependentMountCount,
     })
   }
 
   return {
     listOverviews: async (): Promise<ListWorkerEndpointOverviewsResult> => {
       const endpoints = await options.topology.listEndpoints()
+      const impactByEndpointId = await options.topology.getEndpointRemovalImpacts(
+        endpoints.endpoints.map(endpoint => endpoint.endpointId),
+      )
       const overviews = await Promise.all(
         endpoints.endpoints.map(async endpoint => {
+          const impact = impactByEndpointId.get(endpoint.endpointId) ?? {
+            mountIds: [],
+            mountCount: 0,
+          }
           const access = await options.topology.resolveEndpointRuntimeAccess(endpoint.endpointId)
           if (!access) {
             return buildOverview(endpoint, {
@@ -296,10 +312,11 @@ export function createEndpointHealthService(options: {
               canBrowse: endpoint.endpointId === 'local',
               summary:
                 endpoint.endpointId === 'local' ? 'Local endpoint.' : 'Endpoint unavailable.',
+              dependentMountCount: impact.mountCount,
             })
           }
 
-          return await buildOverviewForAccess(access)
+          return await buildOverviewForAccess(access, impact.mountCount)
         }),
       )
 
@@ -310,6 +327,7 @@ export function createEndpointHealthService(options: {
       input: PrepareWorkerEndpointInput,
     ): Promise<PrepareWorkerEndpointResult> => {
       const access = await options.topology.resolveEndpointRuntimeAccess(input.endpointId)
+      const impact = await options.topology.getEndpointRemovalImpact(input.endpointId)
       if (!access) {
         const endpoint = (await options.topology.listEndpoints()).endpoints.find(
           candidate => candidate.endpointId === input.endpointId,
@@ -319,12 +337,13 @@ export function createEndpointHealthService(options: {
             status: 'error',
             details: ['Endpoint not found.'],
             recommendedAction: 'retry',
+            dependentMountCount: impact.mountCount,
           }),
         }
       }
 
       if (access.kind === 'manual') {
-        return { overview: await buildOverviewForAccess(access) }
+        return { overview: await buildOverviewForAccess(access, impact.mountCount) }
       }
 
       const prepared = await options.managedRuntime.prepare(toManagedRuntimeAccess(access), {
@@ -340,6 +359,7 @@ export function createEndpointHealthService(options: {
             runtime: probed.runtime,
             recommendedAction: recommendedActionForAccessStatus(access, probed.status),
             canBrowse: probed.status === 'connected',
+            dependentMountCount: impact.mountCount,
           }),
         }
       }
@@ -350,6 +370,7 @@ export function createEndpointHealthService(options: {
           status: snapshot.status === 'error' ? 'tunnel_failed' : 'needs_setup',
           details: [snapshot.lastError ?? 'Remote runtime is not ready yet.'],
           recommendedAction: snapshot.status === 'error' ? 'repair_tunnel' : 'install_runtime',
+          dependentMountCount: impact.mountCount,
         }),
       }
     },
@@ -358,18 +379,20 @@ export function createEndpointHealthService(options: {
       input: RepairWorkerEndpointInput,
     ): Promise<RepairWorkerEndpointResult> => {
       const access = await options.topology.resolveEndpointRuntimeAccess(input.endpointId)
+      const impact = await options.topology.getEndpointRemovalImpact(input.endpointId)
       if (!access) {
         return {
           overview: buildOverview(makeMissingEndpoint(input.endpointId), {
             status: 'error',
             details: ['Endpoint not found.'],
             recommendedAction: 'retry',
+            dependentMountCount: impact.mountCount,
           }),
         }
       }
 
       if (access.kind === 'manual') {
-        return { overview: await buildOverviewForAccess(access) }
+        return { overview: await buildOverviewForAccess(access, impact.mountCount) }
       }
 
       const prepared = await options.managedRuntime.prepare(toManagedRuntimeAccess(access), {
@@ -390,6 +413,7 @@ export function createEndpointHealthService(options: {
             runtime: probed.runtime,
             recommendedAction: recommendedActionForAccessStatus(access, probed.status),
             canBrowse: probed.status === 'connected',
+            dependentMountCount: impact.mountCount,
           }),
         }
       }
@@ -402,6 +426,7 @@ export function createEndpointHealthService(options: {
             access,
             prepared.snapshot.status === 'error' ? 'tunnel_failed' : 'error',
           ),
+          dependentMountCount: impact.mountCount,
         }),
       }
     },
