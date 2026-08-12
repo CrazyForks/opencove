@@ -1,4 +1,10 @@
 const SIGNALS = {
+  '<test-hook-initial-working>': {
+    version: 1,
+    state: 'working',
+    hookEventName: 'UserPromptSubmit',
+    claudeSessionId: 'claude-hook-e2e',
+  },
   '<test-hook-tool>': {
     version: 1,
     state: 'working',
@@ -42,13 +48,14 @@ async function postHook(envelope) {
   }
 }
 
-export async function runClaudeHookLifecycleScenario() {
-  await postHook({
-    version: 1,
-    state: 'working',
-    hookEventName: 'UserPromptSubmit',
-    claudeSessionId: 'claude-hook-e2e',
-  })
+async function runClaudeHookScenario(cwd, { sessionFileWarmStandby }) {
+  const sessionFilePath = sessionFileWarmStandby ? await createClaudeSessionFile(cwd) : null
+  if (sessionFilePath) {
+    await appendClaudeRecord(sessionFilePath, {
+      type: 'user',
+      message: { content: [{ type: 'text', text: 'Begin arbitration test.' }] },
+    })
+  }
   process.stdout.write('[opencove-test-hook] ready\n')
 
   await new Promise((resolveRun, reject) => {
@@ -66,6 +73,20 @@ export async function runClaudeHookLifecycleScenario() {
           return
         }
         input += String.fromCharCode(byte)
+        if (sessionFilePath && input.endsWith('<test-session-standby>')) {
+          input = ''
+          operation = operation.then(async () => {
+            await appendClaudeRecord(sessionFilePath, {
+              type: 'assistant',
+              message: {
+                content: [{ type: 'text', text: 'Conflicting fallback standby.' }],
+                stop_reason: 'end_turn',
+              },
+            })
+            process.stdout.write('[opencove-test-hook] session-standby\n')
+          })
+          continue
+        }
         const matched = Object.entries(SIGNALS).find(([signal]) => input.endsWith(signal))
         if (matched) {
           input = ''
@@ -81,6 +102,14 @@ export async function runClaudeHookLifecycleScenario() {
     process.stdin.on('data', onData)
     process.stdin.resume()
   })
+}
+
+export async function runClaudeHookLifecycleScenario(cwd) {
+  await runClaudeHookScenario(cwd, { sessionFileWarmStandby: false })
+}
+
+export async function runClaudeHookArbitrationScenario(cwd) {
+  await runClaudeHookScenario(cwd, { sessionFileWarmStandby: true })
 }
 
 export async function runClaudeHookFallbackScenario(cwd) {

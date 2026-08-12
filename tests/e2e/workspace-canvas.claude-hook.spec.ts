@@ -60,6 +60,22 @@ async function launchClaudeTask(
   return { sessionId, agentNode }
 }
 
+async function waitForInitialHookWorkingSignal(
+  window: Awaited<ReturnType<typeof launchApp>>['window'],
+  sessionId: string,
+): Promise<void> {
+  await writeToPty(window, { sessionId, data: '<test-hook-initial-working>\r' })
+  // Drive the first hook POST only after the PTY session is observable. Until it lands,
+  // session_file legitimately wins arbitration, so gate hook authority on the real signal.
+  await expect
+    .poll(async () => {
+      return await window.evaluate(id => {
+        return window.__opencoveAgentRunStateTestApi?.getSession(id)?.lastHookSignal?.state ?? null
+      }, sessionId)
+    })
+    .toBe('working')
+}
+
 test.describe('Workspace Canvas - Claude hook channel', () => {
   test('projects authoritative working, waiting, and standby without tool-call false positives', async () => {
     const { electronApp, window } = await launchApp({
@@ -75,6 +91,7 @@ test.describe('Workspace Canvas - Claude hook channel', () => {
       const status = agentNode.locator('.terminal-node__status')
       const sidebarStatus = window.locator('.workspace-agent-item__status--agent').first()
 
+      await waitForInitialHookWorkingSignal(window, sessionId)
       await expect(agentNode).toHaveAttribute('data-agent-state-source', 'claude_hook')
       await expect(status).toHaveText('Working')
       await writeToPty(window, { sessionId, data: '<test-hook-tool>\r' })
@@ -109,6 +126,68 @@ test.describe('Workspace Canvas - Claude hook channel', () => {
       await expect(agentNode).toHaveAttribute('data-agent-state-source', 'session_file')
       await expect(agentNode).toHaveAttribute('data-agent-hook-install-state', 'error')
       await expect(agentNode.locator('[data-testid="agent-hook-degraded"]')).toHaveText('Fallback')
+    } finally {
+      await electronApp.close()
+    }
+  })
+
+  test('arbitrates conflicting sources and falls back exactly when working goes stale', async () => {
+    const { electronApp, window } = await launchApp({
+      windowMode: 'inactive',
+      env: {
+        OPENCOVE_TEST_ENABLE_SESSION_STATE_WATCHER: '1',
+        OPENCOVE_TEST_AGENT_SESSION_SCENARIO: 'claude-hook-arbitration',
+        OPENCOVE_TEST_CLAUDE_HOOK_INSTALL_FAILURE: '0',
+      },
+    })
+    try {
+      const { sessionId, agentNode } = await launchClaudeTask(window)
+      const status = agentNode.locator('.terminal-node__status')
+
+      await waitForInitialHookWorkingSignal(window, sessionId)
+      await expect(agentNode).toHaveAttribute('data-agent-state-source', 'claude_hook')
+      await expect(status).toHaveText('Working')
+      await writeToPty(window, { sessionId, data: '<test-hook-waiting>\r' })
+      await expect(status).toHaveText('Waiting')
+
+      await writeToPty(window, { sessionId, data: '<test-session-standby>\r' })
+      await expect
+        .poll(async () => {
+          return await window.evaluate(id => {
+            return window.__opencoveAgentRunStateTestApi?.getSession(id)?.lastSessionFileSignal
+              ?.state
+          }, sessionId)
+        })
+        .toBe('standby')
+      await expect(status).toHaveText('Waiting')
+      await expect(agentNode).toHaveAttribute('data-agent-state-source', 'claude_hook')
+
+      expect(
+        await window.evaluate(() => {
+          return window.__opencoveAgentRunStateTestApi?.advanceBy(1_200_000) ?? false
+        }),
+      ).toBe(true)
+      await expect(status).toHaveText('Waiting')
+      await expect(agentNode).toHaveAttribute('data-agent-state-source', 'claude_hook')
+
+      await writeToPty(window, { sessionId, data: '<test-hook-done>\r' })
+      await expect(status).toHaveText('Standby')
+      await writeToPty(window, { sessionId, data: '<test-hook-tool>\r' })
+      await expect(status).toHaveText('Working')
+
+      expect(
+        await window.evaluate(() => {
+          return window.__opencoveAgentRunStateTestApi?.advanceBy(120_000) ?? false
+        }),
+      ).toBe(true)
+      await expect(status).toHaveText('Standby')
+      await expect(agentNode).toHaveAttribute('data-agent-state-source', 'session_file')
+      await expect(agentNode.locator('[data-testid="agent-hook-degraded"]')).toHaveText('Fallback')
+
+      await writeToPty(window, { sessionId, data: '<test-hook-tool>\r' })
+      await expect(status).toHaveText('Working')
+      await expect(agentNode).toHaveAttribute('data-agent-state-source', 'claude_hook')
+      await expect(agentNode.locator('[data-testid="agent-hook-degraded"]')).toHaveCount(0)
     } finally {
       await electronApp.close()
     }
