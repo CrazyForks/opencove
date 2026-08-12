@@ -6,6 +6,7 @@ import { TerminalNode } from '../TerminalNode'
 import { useScrollbackStore } from '../../store/useScrollbackStore'
 import type { NodeFrame, TerminalNodeData } from '../../types'
 import { isResumeSessionBindingVerified } from '../../utils/agentResumeBinding'
+import { isAgentTreatedNode } from '../../utils/terminalAgentOverlay'
 import {
   findLinkedTaskTitleForAgent,
   providerTitlePrefix,
@@ -59,7 +60,9 @@ function WorkspaceCanvasTerminalNodeTypeComponent({
   updateNodeScrollbackRef: MutableRefObject<UpdateNodeScrollback>
   normalizeViewportForTerminalInteractionRef: MutableRefObject<(nodeId: string) => void>
   updateTerminalTitleRef: MutableRefObject<(nodeId: string, title: string) => void>
-  clearTerminalAgentOverlayRef: MutableRefObject<(nodeId: string) => void>
+  clearTerminalAgentOverlayRef: MutableRefObject<
+    (nodeId: string, expectedStartedAtMs?: number) => void
+  >
   renameTerminalTitleRef: MutableRefObject<(nodeId: string, title: string) => void>
 }): ReactElement {
   const storeApi = useStoreApi()
@@ -69,9 +72,18 @@ function WorkspaceCanvasTerminalNodeTypeComponent({
   const getNodePosition = useCallback(() => {
     return readNodePositionFromStoreState(storeApi.getState(), id)
   }, [id, storeApi])
+  const overlayStartedAtMs =
+    data.kind === 'terminal' && data.agentOverlay ? data.agentOverlay.startedAtMs : null
+  const handleAgentOverlayExit = useCallback(() => {
+    if (overlayStartedAtMs === null) {
+      return
+    }
+    clearTerminalAgentOverlayRef.current(id, overlayStartedAtMs)
+  }, [clearTerminalAgentOverlayRef, id, overlayStartedAtMs])
   const labelColor =
     (data as TerminalNodeData & { effectiveLabelColor?: LabelColor | null }).effectiveLabelColor ??
     null
+  const isAgentTreated = isAgentTreatedNode({ data })
   const resolvedTerminalProvider =
     data.kind === 'agent'
       ? (data.agent?.provider ?? null)
@@ -132,7 +144,9 @@ function WorkspaceCanvasTerminalNodeTypeComponent({
       labelColor={labelColor}
       agentLaunchMode={data.kind === 'agent' ? (data.agent?.launchMode ?? null) : null}
       agentExecutionDirectory={
-        data.kind === 'agent' ? (data.agent?.executionDirectory ?? null) : null
+        data.kind === 'agent'
+          ? (data.agent?.executionDirectory ?? null)
+          : (data.executionDirectory ?? null)
       }
       agentResumeSessionId={
         data.kind === 'agent'
@@ -184,28 +198,28 @@ function WorkspaceCanvasTerminalNodeTypeComponent({
         void closeNodeRef.current(id)
       }}
       onCopyLastMessage={
-        data.kind === 'agent' && data.agent && typeof data.startedAt === 'string'
+        isAgentTreated
           ? async () => {
               await copyAgentLastMessageRef.current(id)
             }
           : undefined
       }
       onReloadSession={
-        data.kind === 'agent' && data.agent
+        isAgentTreated
           ? async () => {
               await reloadAgentSessionRef.current(id)
             }
           : undefined
       }
       onListSessions={
-        data.kind === 'agent' && data.agent
+        isAgentTreated
           ? async limit => {
               return await listAgentSessionsRef.current(id, limit)
             }
           : undefined
       }
       onSwitchSession={
-        data.kind === 'agent' && data.agent
+        isAgentTreated
           ? async summary => {
               await switchAgentSessionRef.current(id, summary)
             }
@@ -224,11 +238,7 @@ function WorkspaceCanvasTerminalNodeTypeComponent({
             }
           : undefined
       }
-      onAgentOverlayExit={
-        data.kind === 'terminal' && data.agentOverlay
-          ? () => clearTerminalAgentOverlayRef.current(id)
-          : undefined
-      }
+      onAgentOverlayExit={overlayStartedAtMs === null ? undefined : handleAgentOverlayExit}
       onTitleCommit={
         data.kind === 'terminal' || data.kind === 'agent'
           ? nextTitle => {
